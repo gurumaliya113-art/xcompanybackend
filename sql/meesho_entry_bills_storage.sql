@@ -3,6 +3,18 @@
 -- Bucket name expected: meesho-entry-bills
 -- Note: If you want to open PDFs via getPublicUrl(), set bucket to Public in Storage.
 
+-- IMPORTANT:
+-- Policies do NOT create buckets. Create the bucket first (UI or SQL below),
+-- otherwise uploads will fail with "Bucket not found".
+
+-- Create bucket if missing (and set public=true so getPublicUrl() works)
+-- If you want private PDFs, set public=false and use signed URLs in frontend.
+insert into storage.buckets (id, name, public)
+values ('meesho-entry-bills', 'meesho-entry-bills', true)
+on conflict (id) do update set
+	name = excluded.name,
+	public = excluded.public;
+
 -- Allow authenticated users to upload PDFs into this bucket
 DROP POLICY IF EXISTS "meesho_bills_insert" ON storage.objects;
 CREATE POLICY "meesho_bills_insert"
