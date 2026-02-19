@@ -14,6 +14,7 @@ create table if not exists public.meesho_entries (
   return_status text not null default 'NONE',
   cancelled_by text not null default 'NONE',
   image_url text null,
+  bill_pdf_url text null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -21,6 +22,10 @@ create table if not exists public.meesho_entries (
 -- Backward-compatible add (if table already existed)
 alter table public.meesho_entries
   add column if not exists image_url text;
+
+-- Backward-compatible add (if table already existed)
+alter table public.meesho_entries
+  add column if not exists bill_pdf_url text;
 
 -- Backward-compatible add (if table already existed)
 alter table public.meesho_entries
