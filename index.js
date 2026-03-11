@@ -1,8 +1,16 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+dotenv.config({ path: join(__dirname, ".env") });
 
 import express from "express";
 import cors from "cors";
 import { createClient } from "@supabase/supabase-js";
+import { Resend } from "resend";
+import { randomInt, createHash } from "crypto";
 
 const app = express();
 app.use(cors());
@@ -249,6 +257,243 @@ app.post("/sell-shares", async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Unexpected server error" });
+  }
+});
+
+/* ================= EMAIL OTP SYSTEM ================= */
+
+const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+const FOUNDER_EMAIL = process.env.FOUNDER_EMAIL || "";
+const OTP_EXPIRY_MS = 2 * 60 * 1000; // 2 minutes
+const MAX_OTP_ATTEMPTS = 3;
+
+// In-memory OTP store: Map<orderId, { hash, amount, type, createdAt, expiresAt, used, attempts, ip, ... }>
+const otpStore = new Map();
+
+// Cleanup expired OTPs every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, entry] of otpStore) {
+    if (now > entry.expiresAt + 60000) otpStore.delete(id);
+  }
+}, 5 * 60 * 1000);
+
+function hashOtp(otp) {
+  return createHash("sha256").update(String(otp)).digest("hex");
+}
+
+function generateOrderId() {
+  const ts = Date.now().toString(36);
+  const rand = randomInt(0, 0xfffff).toString(36);
+  return `TXC-${ts}-${rand}`.toUpperCase();
+}
+
+function formatINR(n) {
+  try { return "\u20B9" + Number(n).toLocaleString("en-IN"); } catch { return "\u20B9" + n; }
+}
+
+// Rate limit: max 5 OTP requests per IP per 10 minutes
+const rateLimitMap = new Map();
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const window = 10 * 60 * 1000;
+  const entry = rateLimitMap.get(ip) || [];
+  const recent = entry.filter(ts => now - ts < window);
+  if (recent.length >= 5) return false;
+  recent.push(now);
+  rateLimitMap.set(ip, recent);
+  return true;
+}
+
+// POST /generate-otp — PM requests OTP, email sent to Founder
+app.post("/generate-otp", async (req, res) => {
+  try {
+    if (!resend || !FOUNDER_EMAIL) {
+      return res.status(500).json({ ok: false, error: "Email not configured. Set RESEND_API_KEY and FOUNDER_EMAIL in backend .env" });
+    }
+
+    const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown";
+    if (!checkRateLimit(ip)) {
+      return res.status(429).json({ ok: false, error: "Too many OTP requests. Wait a few minutes." });
+    }
+
+    const { amount, type, source, reason, business_id, pm_employee_id } = req.body || {};
+    const amountNum = Number(amount);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      return res.status(400).json({ ok: false, error: "Invalid amount" });
+    }
+
+    const requestType = type === "submit" ? "submit" : "request";
+    const poolSource = source === "BANK" ? "BANK" : "CASH";
+    const poolReason = typeof reason === "string" ? reason.trim().slice(0, 500) : "";
+    const otp = String(randomInt(100000, 999999));
+    const orderId = generateOrderId();
+    const now = Date.now();
+
+    // Store hashed OTP
+    otpStore.set(orderId, {
+      hash: hashOtp(otp),
+      amount: amountNum,
+      type: requestType,
+      source: poolSource,
+      reason: poolReason,
+      business_id: business_id || null,
+      pm_employee_id: pm_employee_id || null,
+      createdAt: now,
+      expiresAt: now + OTP_EXPIRY_MS,
+      used: false,
+      attempts: 0,
+      ip,
+    });
+
+    // Send email to Founder
+    const actionLabel = requestType === "request" ? "Money Request FROM Pool" : "Money Submit TO Pool";
+    const sourceLabel = poolSource === "BANK" ? "Bank" : "Cash";
+    const { error: emailErr } = await resend.emails.send({
+      from: "The X Company <onboarding@resend.dev>",
+      to: [FOUNDER_EMAIL],
+      subject: `Payment Approval Required - ${formatINR(amountNum)} (${sourceLabel})`,
+      html: `
+        <div style="font-family:'Inter',Arial,sans-serif;max-width:500px;margin:0 auto;padding:32px 24px;border:1px solid #e2e8f0;border-radius:16px;">
+          <h2 style="margin:0 0 20px;color:#0f172a;">Payment Confirmation Required</h2>
+          <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+            <tr><td style="padding:8px 0;color:#64748b;">Type</td><td style="padding:8px 0;font-weight:700;">${actionLabel}</td></tr>
+            <tr><td style="padding:8px 0;color:#64748b;">Source</td><td style="padding:8px 0;font-weight:700;">${sourceLabel}</td></tr>
+            <tr><td style="padding:8px 0;color:#64748b;">Amount</td><td style="padding:8px 0;font-weight:700;font-size:1.3rem;color:#0ea5e9;">${formatINR(amountNum)}</td></tr>${poolReason ? `
+            <tr><td style="padding:8px 0;color:#64748b;">Reason</td><td style="padding:8px 0;">${poolReason.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td></tr>` : ''}
+            <tr><td style="padding:8px 0;color:#64748b;">Order ID</td><td style="padding:8px 0;font-family:monospace;">${orderId}</td></tr>
+            <tr><td style="padding:8px 0;color:#64748b;">Website</td><td style="padding:8px 0;">The X Company</td></tr>
+          </table>
+          <div style="background:#f0f9ff;border:2px solid #0ea5e9;border-radius:12px;padding:20px;text-align:center;margin-bottom:20px;">
+            <div style="font-size:12px;color:#64748b;margin-bottom:6px;">OTP Code</div>
+            <div style="font-size:2.5rem;font-weight:800;letter-spacing:8px;color:#0f172a;">${otp}</div>
+          </div>
+          <p style="color:#64748b;font-size:13px;margin:0;">Enter this OTP on the website to approve the payment.<br>This OTP will expire in <b>2 minutes</b>.</p>
+        </div>
+      `,
+    });
+
+    if (emailErr) {
+      otpStore.delete(orderId);
+      return res.status(500).json({ ok: false, error: "Failed to send email: " + (emailErr.message || JSON.stringify(emailErr)) });
+    }
+
+    return res.json({
+      ok: true,
+      order_id: orderId,
+      message: "OTP sent to founder's email. Expires in 2 minutes.",
+      expires_in: OTP_EXPIRY_MS / 1000,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: "Unexpected error" });
+  }
+});
+
+// POST /verify-otp — PM enters OTP, backend verifies and processes payment
+app.post("/verify-otp", async (req, res) => {
+  try {
+    if (!supabase) return res.status(500).json({ ok: false, error: "Server not configured" });
+
+    const { order_id, code } = req.body || {};
+
+    if (!order_id || typeof order_id !== "string") {
+      return res.status(400).json({ ok: false, error: "Order ID required" });
+    }
+    if (!code || typeof code !== "string" || !/^\d{6}$/.test(code.trim())) {
+      return res.status(400).json({ ok: false, error: "Invalid OTP (must be 6 digits)" });
+    }
+
+    const entry = otpStore.get(order_id);
+    if (!entry) {
+      return res.status(400).json({ ok: false, error: "Invalid or expired Order ID. Generate a new OTP." });
+    }
+
+    if (Date.now() > entry.expiresAt) {
+      otpStore.delete(order_id);
+      return res.status(400).json({ ok: false, error: "OTP expired. Generate a new one." });
+    }
+
+    if (entry.used) {
+      return res.status(400).json({ ok: false, error: "OTP already used. Generate a new one." });
+    }
+
+    entry.attempts++;
+    if (entry.attempts > MAX_OTP_ATTEMPTS) {
+      otpStore.delete(order_id);
+      return res.status(400).json({ ok: false, error: "Too many wrong attempts. Generate a new OTP." });
+    }
+
+    if (hashOtp(code.trim()) !== entry.hash) {
+      const remaining = MAX_OTP_ATTEMPTS - entry.attempts;
+      return res.json({ ok: false, error: `Wrong OTP. ${remaining} attempt(s) remaining.` });
+    }
+
+    // OTP correct — mark used
+    entry.used = true;
+
+    const amountNum = entry.amount;
+    const requestType = entry.type;
+
+    // Read current pool
+    const { data: poolRows, error: poolErr } = await supabase
+      .from("company_money_pool")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (poolErr || !poolRows || !poolRows[0]) {
+      return res.status(500).json({ ok: false, error: "Could not read money pool" });
+    }
+
+    const latest = poolRows[0];
+    const l1 = Number(latest.layer1_amount || 0);
+    const l2 = Number(latest.layer2_amount || 0);
+    const isCash = entry.source === "CASH";
+
+    if (requestType === "request") {
+      const available = isCash ? l1 : l2;
+      if (amountNum > available) {
+        return res.status(400).json({ ok: false, error: `Pool insufficient. Available (${isCash ? 'Cash' : 'Bank'}): ${formatINR(available)}` });
+      }
+      const { error: insErr } = await supabase.from("company_money_pool").insert([{
+        layer1_amount: isCash ? l1 - amountNum : l1,
+        layer2_amount: isCash ? l2 : l2 - amountNum,
+      }]);
+      if (insErr) return res.status(500).json({ ok: false, error: "Failed to deduct from pool" });
+    } else {
+      const { error: insErr } = await supabase.from("company_money_pool").insert([{
+        layer1_amount: isCash ? l1 + amountNum : l1,
+        layer2_amount: isCash ? l2 : l2 + amountNum,
+      }]);
+      if (insErr) return res.status(500).json({ ok: false, error: "Failed to add to pool" });
+    }
+
+    // Log to money_pool_ledger — best effort
+    const ledgerReason = entry.reason
+      ? entry.reason
+      : `PM pool ${requestType} (Email OTP, Order: ${order_id})${entry.business_id ? " - biz:" + entry.business_id : ""}`;
+    try {
+      await supabase.from("money_pool_ledger").insert([{
+        source: entry.source || "CASH",
+        type: requestType === "request" ? "MINUS" : "PLUS",
+        amount: amountNum,
+        from_text: entry.pm_employee_id || null,
+        reason: ledgerReason,
+      }]);
+    } catch (_) {}
+
+    otpStore.delete(order_id);
+
+    return res.json({
+      ok: true,
+      message: requestType === "request"
+        ? `${formatINR(amountNum)} taken from pool successfully`
+        : `${formatINR(amountNum)} submitted to pool successfully`,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: "Unexpected error" });
   }
 });
 
