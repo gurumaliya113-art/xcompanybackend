@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS dce_documents (
   owner TEXT,
   status TEXT NOT NULL,
   confidentiality TEXT NOT NULL,
+  description TEXT,
+  file_url TEXT,
+  file_type TEXT NOT NULL DEFAULT 'image',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -72,9 +75,41 @@ CREATE TABLE IF NOT EXISTS dce_expenditures (
   inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS dce_document_comments (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  document_id BIGINT NOT NULL,
+  commenter TEXT,
+  comment_text TEXT NOT NULL,
+  inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (document_id) REFERENCES dce_documents(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_dce_documents_business_id ON dce_documents(business_id);
 CREATE INDEX IF NOT EXISTS idx_dce_meetings_business_id ON dce_meetings(business_id);
 CREATE INDEX IF NOT EXISTS idx_dce_financial_decisions_business_id ON dce_financial_decisions(business_id);
 CREATE INDEX IF NOT EXISTS idx_dce_votes_decision_id ON dce_votes(decision_id);
 CREATE INDEX IF NOT EXISTS idx_dce_audit_logs_business_id ON dce_audit_logs(business_id);
 CREATE INDEX IF NOT EXISTS idx_dce_expenditures_business_id ON dce_expenditures(business_id);
+
+-- Enable row-level security and allow the frontend anon role to access DCE portal tables.
+-- If you later add authentication, tighten these policies accordingly.
+ALTER TABLE public.dce_documents ENABLE ROW LEVEL SECURITY;
+CREATE POLICY IF NOT EXISTS "dce_documents_allow_all_anon" ON public.dce_documents FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.dce_document_comments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY IF NOT EXISTS "dce_document_comments_allow_all_anon" ON public.dce_document_comments FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.dce_meetings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY IF NOT EXISTS "dce_meetings_allow_all_anon" ON public.dce_meetings FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.dce_financial_decisions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY IF NOT EXISTS "dce_financial_decisions_allow_all_anon" ON public.dce_financial_decisions FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.dce_votes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY IF NOT EXISTS "dce_votes_allow_all_anon" ON public.dce_votes FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.dce_audit_logs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY IF NOT EXISTS "dce_audit_logs_allow_all_anon" ON public.dce_audit_logs FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.dce_expenditures ENABLE ROW LEVEL SECURITY;
+CREATE POLICY IF NOT EXISTS "dce_expenditures_allow_all_anon" ON public.dce_expenditures FOR ALL USING (true) WITH CHECK (true);
