@@ -18,6 +18,13 @@ CREATE TABLE IF NOT EXISTS dce_documents (
   inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE public.dce_documents
+  ADD COLUMN IF NOT EXISTS description TEXT,
+  ADD COLUMN IF NOT EXISTS file_url TEXT,
+  ADD COLUMN IF NOT EXISTS file_type TEXT NOT NULL DEFAULT 'image',
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
 CREATE TABLE IF NOT EXISTS dce_meetings (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   business_id TEXT NOT NULL,
@@ -94,22 +101,60 @@ CREATE INDEX IF NOT EXISTS idx_dce_expenditures_business_id ON dce_expenditures(
 -- Enable row-level security and allow the frontend anon role to access DCE portal tables.
 -- If you later add authentication, tighten these policies accordingly.
 ALTER TABLE public.dce_documents ENABLE ROW LEVEL SECURITY;
-CREATE POLICY IF NOT EXISTS "dce_documents_allow_all_anon" ON public.dce_documents FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "dce_documents_allow_all_anon" ON public.dce_documents;
+CREATE POLICY "dce_documents_allow_all_anon" ON public.dce_documents FOR ALL USING (true) WITH CHECK (true);
 
 ALTER TABLE public.dce_document_comments ENABLE ROW LEVEL SECURITY;
-CREATE POLICY IF NOT EXISTS "dce_document_comments_allow_all_anon" ON public.dce_document_comments FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "dce_document_comments_allow_all_anon" ON public.dce_document_comments;
+CREATE POLICY "dce_document_comments_allow_all_anon" ON public.dce_document_comments FOR ALL USING (true) WITH CHECK (true);
 
 ALTER TABLE public.dce_meetings ENABLE ROW LEVEL SECURITY;
-CREATE POLICY IF NOT EXISTS "dce_meetings_allow_all_anon" ON public.dce_meetings FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "dce_meetings_allow_all_anon" ON public.dce_meetings;
+CREATE POLICY "dce_meetings_allow_all_anon" ON public.dce_meetings FOR ALL USING (true) WITH CHECK (true);
 
 ALTER TABLE public.dce_financial_decisions ENABLE ROW LEVEL SECURITY;
-CREATE POLICY IF NOT EXISTS "dce_financial_decisions_allow_all_anon" ON public.dce_financial_decisions FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "dce_financial_decisions_allow_all_anon" ON public.dce_financial_decisions;
+CREATE POLICY "dce_financial_decisions_allow_all_anon" ON public.dce_financial_decisions FOR ALL USING (true) WITH CHECK (true);
 
 ALTER TABLE public.dce_votes ENABLE ROW LEVEL SECURITY;
-CREATE POLICY IF NOT EXISTS "dce_votes_allow_all_anon" ON public.dce_votes FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "dce_votes_allow_all_anon" ON public.dce_votes;
+CREATE POLICY "dce_votes_allow_all_anon" ON public.dce_votes FOR ALL USING (true) WITH CHECK (true);
 
 ALTER TABLE public.dce_audit_logs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY IF NOT EXISTS "dce_audit_logs_allow_all_anon" ON public.dce_audit_logs FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "dce_audit_logs_allow_all_anon" ON public.dce_audit_logs;
+CREATE POLICY "dce_audit_logs_allow_all_anon" ON public.dce_audit_logs FOR ALL USING (true) WITH CHECK (true);
 
 ALTER TABLE public.dce_expenditures ENABLE ROW LEVEL SECURITY;
-CREATE POLICY IF NOT EXISTS "dce_expenditures_allow_all_anon" ON public.dce_expenditures FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "dce_expenditures_allow_all_anon" ON public.dce_expenditures;
+CREATE POLICY "dce_expenditures_allow_all_anon" ON public.dce_expenditures FOR ALL USING (true) WITH CHECK (true);
+
+-- Allow public upload, update, delete and read for the DCE media bucket.
+-- This is required when the frontend uploads files directly with the anon key.
+DROP POLICY IF EXISTS "dce_media_insert" ON storage.objects;
+CREATE POLICY "dce_media_insert"
+ON storage.objects
+FOR INSERT
+TO public
+WITH CHECK (bucket_id = 'dce-media');
+
+DROP POLICY IF EXISTS "dce_media_update" ON storage.objects;
+CREATE POLICY "dce_media_update"
+ON storage.objects
+FOR UPDATE
+TO public
+USING (bucket_id = 'dce-media')
+WITH CHECK (bucket_id = 'dce-media');
+
+DROP POLICY IF EXISTS "dce_media_delete" ON storage.objects;
+CREATE POLICY "dce_media_delete"
+ON storage.objects
+FOR DELETE
+TO public
+USING (bucket_id = 'dce-media');
+
+DROP POLICY IF EXISTS "dce_media_select_public" ON storage.objects;
+CREATE POLICY "dce_media_select_public"
+ON storage.objects
+FOR SELECT
+TO public
+USING (bucket_id = 'dce-media');
