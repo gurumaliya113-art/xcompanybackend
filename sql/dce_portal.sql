@@ -34,10 +34,17 @@ CREATE TABLE IF NOT EXISTS dce_meetings (
   meeting_time TEXT,
   platform TEXT,
   attendees TEXT[],
+  notify_numbers TEXT,
   notes TEXT,
   link TEXT,
   inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.dce_meetings
+  ADD COLUMN IF NOT EXISTS notify_numbers TEXT,
+  ADD COLUMN IF NOT EXISTS notes TEXT,
+  ADD COLUMN IF NOT EXISTS link TEXT,
+  ADD COLUMN IF NOT EXISTS inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 CREATE TABLE IF NOT EXISTS dce_financial_decisions (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

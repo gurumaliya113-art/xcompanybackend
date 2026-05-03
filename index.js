@@ -264,8 +264,15 @@ app.post("/sell-shares", async (req, res) => {
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 const FOUNDER_EMAIL = process.env.FOUNDER_EMAIL || "";
+const FAST2SMS_API_KEY = process.env.FAST2SMS_API_KEY || "";
+const FAST2SMS_SENDER_ID = process.env.FAST2SMS_SENDER_ID || "FSTSMS";
+const FAST2SMS_ROUTE = process.env.FAST2SMS_ROUTE || "v3";
 const OTP_EXPIRY_MS = 2 * 60 * 1000; // 2 minutes
 const MAX_OTP_ATTEMPTS = 3;
+
+if (!FAST2SMS_API_KEY) {
+  console.warn("FAST2SMS_API_KEY is not configured. SMS notification route will be disabled.");
+}
 
 // In-memory OTP store: Map<orderId, { hash, amount, type, createdAt, expiresAt, used, attempts, ip, ... }>
 const otpStore = new Map();
@@ -496,7 +503,109 @@ app.post("/verify-otp", async (req, res) => {
     res.status(500).json({ ok: false, error: "Unexpected error" });
   }
 });
+function normalizePhoneNumbers(value) {
+  const raw = String(value || '').trim().replace(/[\s,;]+/g, ' ');
+  if (!raw) return '';
+  const cleaned = raw.replace(/[^0-9+]/g, '');
+  if (!cleaned) return '';
+  if (cleaned.startsWith('+')) return cleaned;
+  if (cleaned.startsWith('0') && cleaned.length > 1) return cleaned.slice(1);
+  return cleaned;
+}
 
+app.post('/send-meeting-email', async (req, res) => {
+  try {
+    if (!resend) {
+      return res.status(500).json({ ok: false, error: 'Email service not configured.' });
+    }
+
+    const {
+      emails,
+      title,
+      meeting_date,
+      meeting_time,
+      platform,
+      link,
+      notes
+    } = req.body || {};
+
+    if (!emails) {
+      return res.status(400).json({ ok: false, error: 'Email addresses are required.' });
+    }
+
+    let emailList = Array.isArray(emails) ? emails : String(emails).split(/[\s,;]+/);
+    emailList = emailList.map(email => String(email || '').trim()).filter(Boolean);
+    if (!emailList.length) {
+      return res.status(400).json({ ok: false, error: 'No valid email addresses were provided.' });
+    }
+
+    const messageLines = [
+      `Meeting Reminder: ${title || 'No title'}`,
+      `Date: ${meeting_date || 'TBD'}`,
+      `Time: ${meeting_time || 'TBD'}`,
+      `Platform: ${platform || 'N/A'}`,
+    ];
+    if (link) messageLines.push(`Link: ${link}`);
+    if (notes) messageLines.push(`Notes: ${notes}`);
+
+    const emailBody = messageLines.join('\n\n');
+
+    try {
+      const { error: emailErr } = await resend.emails.send({
+        from: "The X Company <onboarding@resend.dev>",
+        to: emailList,
+        subject: `Meeting Reminder: ${title || 'Meeting'}`,
+        html: `
+          <div style="font-family:'Inter',Arial,sans-serif;max-width:600px;margin:0 auto;padding:32px 24px;border:1px solid #e2e8f0;border-radius:16px;">
+            <h2 style="margin:0 0 20px;color:#0f172a;">Meeting Reminder</h2>
+            <div style="background:#f8fafc;border-radius:12px;padding:20px;margin-bottom:20px;">
+              <h3 style="margin:0 0 16px;color:#1e293b;">${title || 'Meeting'}</h3>
+              <table style="width:100%;border-collapse:collapse;">
+                <tr><td style="padding:8px 0;color:#64748b;font-weight:500;">Date</td><td style="padding:8px 0;">${meeting_date || 'TBD'}</td></tr>
+                <tr><td style="padding:8px 0;color:#64748b;font-weight:500;">Time</td><td style="padding:8px 0;">${meeting_time || 'TBD'}</td></tr>
+                <tr><td style="padding:8px 0;color:#64748b;font-weight:500;">Platform</td><td style="padding:8px 0;">${platform || 'N/A'}</td></tr>${link ? `
+                <tr><td style="padding:8px 0;color:#64748b;font-weight:500;">Link</td><td style="padding:8px 0;"><a href="${link}" style="color:#0ea5e9;text-decoration:underline;">${link}</a></td></tr>` : ''}${notes ? `
+                <tr><td style="padding:8px 0;color:#64748b;font-weight:500;">Notes</td><td style="padding:8px 0;">${notes.replace(/\n/g, '<br>')}</td></tr>` : ''}
+              </table>
+            </div>
+            <p style="color:#64748b;font-size:14px;margin:0;">This is an automated meeting reminder from The X Company.</p>
+          </div>
+        `,
+      });
+
+      if (emailErr) {
+        console.error('Meeting email send failed', emailErr);
+        // Check if it's a domain verification issue
+        const errorMessage = emailErr.message || String(emailErr);
+        if (errorMessage && errorMessage.includes('verify a domain')) {
+          return res.status(500).json({
+            ok: false,
+            error: 'Email sending requires domain verification. Please verify a domain at resend.com/domains and update the from address.',
+            details: errorMessage
+          });
+        }
+        return res.status(500).json({ ok: false, error: 'Failed to send email notification.', details: errorMessage });
+      }
+
+      return res.json({ ok: true, message: 'Meeting email sent successfully' });
+    } catch (emailErr) {
+      console.error('Meeting email send failed', emailErr);
+      // Check if it's a domain verification issue
+      const errorMessage = emailErr.message || String(emailErr);
+      if (errorMessage && errorMessage.includes('verify a domain')) {
+        return res.status(500).json({
+          ok: false,
+          error: 'Email sending requires domain verification. Please verify a domain at resend.com/domains and update the from address.',
+          details: errorMessage
+        });
+      }
+      return res.status(500).json({ ok: false, error: 'Failed to send email notification.', details: errorMessage });
+    }
+  } catch (error) {
+    console.error('Meeting email send failed', error);
+    return res.status(500).json({ ok: false, error: 'Failed to send email notification.' });
+  }
+});
 app.listen(port, () => {
   console.log(`Backend running on port ${port}`);
 });
