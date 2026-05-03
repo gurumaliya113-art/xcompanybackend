@@ -46,6 +46,29 @@ ALTER TABLE public.dce_meetings
   ADD COLUMN IF NOT EXISTS link TEXT,
   ADD COLUMN IF NOT EXISTS inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
+CREATE TABLE IF NOT EXISTS dce_notes (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  business_id TEXT NOT NULL,
+  business_name TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT,
+  todos JSONB NOT NULL DEFAULT '[]',
+  reminder TEXT,
+  deadline DATE,
+  highlight_color TEXT NOT NULL DEFAULT 'yellow',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.dce_notes
+  ADD COLUMN IF NOT EXISTS content TEXT,
+  ADD COLUMN IF NOT EXISTS todos JSONB NOT NULL DEFAULT '[]',
+  ADD COLUMN IF NOT EXISTS reminder TEXT,
+  ADD COLUMN IF NOT EXISTS deadline DATE,
+  ADD COLUMN IF NOT EXISTS highlight_color TEXT NOT NULL DEFAULT 'yellow',
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
 CREATE TABLE IF NOT EXISTS dce_financial_decisions (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   business_id TEXT NOT NULL,
@@ -100,6 +123,7 @@ CREATE TABLE IF NOT EXISTS dce_document_comments (
 
 CREATE INDEX IF NOT EXISTS idx_dce_documents_business_id ON dce_documents(business_id);
 CREATE INDEX IF NOT EXISTS idx_dce_meetings_business_id ON dce_meetings(business_id);
+CREATE INDEX IF NOT EXISTS idx_dce_notes_business_id ON dce_notes(business_id);
 CREATE INDEX IF NOT EXISTS idx_dce_financial_decisions_business_id ON dce_financial_decisions(business_id);
 CREATE INDEX IF NOT EXISTS idx_dce_votes_decision_id ON dce_votes(decision_id);
 CREATE INDEX IF NOT EXISTS idx_dce_audit_logs_business_id ON dce_audit_logs(business_id);
@@ -118,6 +142,10 @@ CREATE POLICY "dce_document_comments_allow_all_anon" ON public.dce_document_comm
 ALTER TABLE public.dce_meetings ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "dce_meetings_allow_all_anon" ON public.dce_meetings;
 CREATE POLICY "dce_meetings_allow_all_anon" ON public.dce_meetings FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.dce_notes ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "dce_notes_allow_all_anon" ON public.dce_notes;
+CREATE POLICY "dce_notes_allow_all_anon" ON public.dce_notes FOR ALL USING (true) WITH CHECK (true);
 
 ALTER TABLE public.dce_financial_decisions ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "dce_financial_decisions_allow_all_anon" ON public.dce_financial_decisions;
