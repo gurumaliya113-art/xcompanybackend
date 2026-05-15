@@ -260,9 +260,9 @@ app.post("/sell-shares", async (req, res) => {
   }
 });
 
-/* ================= EMAIL OTP SYSTEM ================= */
-
-const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
+app.listen(port, () => {
+  console.log(`Backend running on port ${port}`);
+});
 const FOUNDER_EMAIL = process.env.FOUNDER_EMAIL || "";
 const FAST2SMS_API_KEY = process.env.FAST2SMS_API_KEY || "";
 const FAST2SMS_SENDER_ID = process.env.FAST2SMS_SENDER_ID || "FSTSMS";
@@ -270,6 +270,9 @@ const FAST2SMS_ROUTE = process.env.FAST2SMS_ROUTE || "v3";
 const OTP_EXPIRY_MS = 2 * 60 * 1000; // 2 minutes
 const MAX_OTP_ATTEMPTS = 3;
 
+if (!RESEND_API_KEY) {
+  console.warn("RESEND_API_KEY is not configured. Meeting email notifications will be disabled.");
+}
 if (!FAST2SMS_API_KEY) {
   console.warn("FAST2SMS_API_KEY is not configured. SMS notification route will be disabled.");
 }
@@ -552,7 +555,7 @@ app.post('/send-meeting-email', async (req, res) => {
 
     try {
       const { error: emailErr } = await resend.emails.send({
-        from: "The X Company <onboarding@resend.dev>",
+        from: SEND_EMAIL_FROM,
         to: emailList,
         subject: `Meeting Reminder: ${title || 'Meeting'}`,
         html: `
@@ -606,6 +609,143 @@ app.post('/send-meeting-email', async (req, res) => {
     return res.status(500).json({ ok: false, error: 'Failed to send email notification.' });
   }
 });
+
+/* ================= ANONYMOUS MEETING SCORES ================= */
+
+// Generate a random anonymous ID for the person submitting the score
+function generateAnonymousId() {
+  const rand = randomInt(0, 0xffffff).toString(16).padStart(6, '0');
+  const ts = Date.now().toString(36).slice(-4);
+  return `anon_${ts}${rand}`.toLowerCase();
+}
+
+// POST /api/meeting-scores - Submit an anonymous score for a meeting
+// Completely private - no user identification stored
+app.post('/api/meeting-scores', async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ ok: false, error: 'Database not configured' });
+    }
+
+    const { meeting_id, score } = req.body || {};
+
+    if (!meeting_id) {
+      return res.status(400).json({ ok: false, error: 'Meeting ID is required' });
+    }
+
+    if (!score || typeof score !== 'string') {
+      return res.status(400).json({ ok: false, error: 'Valid score is required' });
+    }
+
+    // Validate score is one of the allowed values
+    const validScores = ['poor', 'bad', 'good', 'excellent'];
+    if (!validScores.includes(score.toLowerCase())) {
+      return res.status(400).json({ ok: false, error: 'Invalid score. Must be: poor, bad, good, or excellent' });
+    }
+
+    // Verify the meeting exists
+    const { data: meeting, error: meetingErr } = await supabase
+      .from('dce_meetings')
+      .select('id')
+      .eq('id', meeting_id)
+      .single();
+
+    if (meetingErr || !meeting) {
+      return res.status(404).json({ ok: false, error: 'Meeting not found' });
+    }
+
+    // Generate anonymous ID and insert score
+    const anonymousId = generateAnonymousId();
+    const { error: insertErr } = await supabase
+      .from('dce_meeting_scores')
+      .insert([{
+        meeting_id,
+        anonymous_id: anonymousId,
+        score: score.toLowerCase(),
+        submitted_at: new Date().toISOString()
+      }]);
+
+    if (insertErr) {
+      console.error('Failed to insert meeting score:', insertErr);
+      return res.status(500).json({ ok: false, error: 'Failed to submit score' });
+    }
+
+    return res.json({
+      ok: true,
+      message: 'Score submitted anonymously',
+      anonymous_id: anonymousId
+    });
+  } catch (e) {
+    console.error('Meeting score submission error:', e);
+    return res.status(500).json({ ok: false, error: 'Unexpected error submitting score' });
+  }
+});
+
+// GET /api/meeting-scores/:meeting_id - Get anonymized score statistics
+// Returns only aggregated counts, never individual scores
+app.get('/api/meeting-scores/:meeting_id', async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ ok: false, error: 'Database not configured' });
+    }
+
+    const { meeting_id } = req.params;
+
+    if (!meeting_id) {
+      return res.status(400).json({ ok: false, error: 'Meeting ID is required' });
+    }
+
+    // Get all scores for the meeting
+    const { data: scores, error: scoresErr } = await supabase
+      .from('dce_meeting_scores')
+      .select('score')
+      .eq('meeting_id', meeting_id);
+
+    if (scoresErr) {
+      console.error('Failed to fetch meeting scores:', scoresErr);
+      return res.status(500).json({ ok: false, error: 'Failed to fetch scores' });
+    }
+
+    // Aggregate scores - no individual identifiers returned
+    const scoreCounts = {
+      poor: 0,
+      bad: 0,
+      good: 0,
+      excellent: 0
+    };
+
+    (scores || []).forEach(scoreEntry => {
+      const scoreValue = scoreEntry.score.toLowerCase();
+      if (scoreCounts.hasOwnProperty(scoreValue)) {
+        scoreCounts[scoreValue]++;
+      }
+    });
+
+    const total = Object.values(scoreCounts).reduce((sum, count) => sum + count, 0);
+
+    return res.json({
+      ok: true,
+      meeting_id,
+      total_responses: total,
+      scores: scoreCounts,
+      percentages: total > 0 ? {
+        poor: Math.round((scoreCounts.poor / total) * 100),
+        bad: Math.round((scoreCounts.bad / total) * 100),
+        good: Math.round((scoreCounts.good / total) * 100),
+        excellent: Math.round((scoreCounts.excellent / total) * 100)
+      } : {
+        poor: 0,
+        bad: 0,
+        good: 0,
+        excellent: 0
+      }
+    });
+  } catch (e) {
+    console.error('Meeting score fetch error:', e);
+    return res.status(500).json({ ok: false, error: 'Unexpected error fetching scores' });
+  }
+});
+
 app.listen(port, () => {
   console.log(`Backend running on port ${port}`);
 });

@@ -121,6 +121,24 @@ CREATE TABLE IF NOT EXISTS dce_document_comments (
   FOREIGN KEY (document_id) REFERENCES dce_documents(id) ON DELETE CASCADE
 );
 
+-- Anonymous meeting scores table
+-- Stores meeting feedback with completely anonymous identifiers
+-- anonymous_id is a random UUID that doesn't correlate to any user
+-- No user identifying information is stored
+CREATE TABLE IF NOT EXISTS dce_meeting_scores (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  meeting_id BIGINT NOT NULL,
+  anonymous_id TEXT NOT NULL,
+  score TEXT NOT NULL,
+  submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (meeting_id) REFERENCES dce_meetings(id) ON DELETE CASCADE
+);
+
+ALTER TABLE public.dce_meeting_scores
+  ADD COLUMN IF NOT EXISTS anonymous_id TEXT,
+  ADD COLUMN IF NOT EXISTS score TEXT,
+  ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
 CREATE INDEX IF NOT EXISTS idx_dce_documents_business_id ON dce_documents(business_id);
 CREATE INDEX IF NOT EXISTS idx_dce_meetings_business_id ON dce_meetings(business_id);
 CREATE INDEX IF NOT EXISTS idx_dce_notes_business_id ON dce_notes(business_id);
@@ -128,6 +146,7 @@ CREATE INDEX IF NOT EXISTS idx_dce_financial_decisions_business_id ON dce_financ
 CREATE INDEX IF NOT EXISTS idx_dce_votes_decision_id ON dce_votes(decision_id);
 CREATE INDEX IF NOT EXISTS idx_dce_audit_logs_business_id ON dce_audit_logs(business_id);
 CREATE INDEX IF NOT EXISTS idx_dce_expenditures_business_id ON dce_expenditures(business_id);
+CREATE INDEX IF NOT EXISTS idx_dce_meeting_scores_meeting_id ON dce_meeting_scores(meeting_id);
 
 -- Enable row-level security and allow the frontend anon role to access DCE portal tables.
 -- If you later add authentication, tighten these policies accordingly.
@@ -162,6 +181,10 @@ CREATE POLICY "dce_audit_logs_allow_all_anon" ON public.dce_audit_logs FOR ALL U
 ALTER TABLE public.dce_expenditures ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "dce_expenditures_allow_all_anon" ON public.dce_expenditures;
 CREATE POLICY "dce_expenditures_allow_all_anon" ON public.dce_expenditures FOR ALL USING (true) WITH CHECK (true);
+
+ALTER TABLE public.dce_meeting_scores ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "dce_meeting_scores_allow_all_anon" ON public.dce_meeting_scores;
+CREATE POLICY "dce_meeting_scores_allow_all_anon" ON public.dce_meeting_scores FOR ALL USING (true) WITH CHECK (true);
 
 -- Allow public upload, update, delete and read for the DCE media bucket.
 -- This is required when the frontend uploads files directly with the anon key.
