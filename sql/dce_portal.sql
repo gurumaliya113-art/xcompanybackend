@@ -109,8 +109,13 @@ CREATE TABLE IF NOT EXISTS dce_expenditures (
   amount NUMERIC NOT NULL DEFAULT 0,
   spend_date DATE,
   status TEXT NOT NULL,
+  note TEXT,
   inserted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Per-spend note for the simplified mobile Money tab.
+ALTER TABLE public.dce_expenditures
+  ADD COLUMN IF NOT EXISTS note TEXT;
 
 CREATE TABLE IF NOT EXISTS dce_document_comments (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

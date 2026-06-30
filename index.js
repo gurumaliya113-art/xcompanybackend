@@ -32,6 +32,27 @@ const supabase =
     ? createClient(supabaseUrl, supabaseServiceKey)
     : null;
 
+// ---- Email (Resend) setup ----
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
+const SEND_EMAIL_FROM = process.env.SEND_EMAIL_FROM || "The X Company <onboarding@resend.dev>";
+// Comma/space separated list of cofounder emails that receive priority task alerts.
+const COFOUNDER_EMAILS = (process.env.COFOUNDER_EMAILS || "")
+  .split(/[\s,;]+/)
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+// ---- Gemini (X-Ai assistant) ----
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
@@ -260,9 +281,6 @@ app.post("/sell-shares", async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`Backend running on port ${port}`);
-});
 const FOUNDER_EMAIL = process.env.FOUNDER_EMAIL || "";
 const FAST2SMS_API_KEY = process.env.FAST2SMS_API_KEY || "";
 const FAST2SMS_SENDER_ID = process.env.FAST2SMS_SENDER_ID || "FSTSMS";
@@ -743,6 +761,169 @@ app.get('/api/meeting-scores/:meeting_id', async (req, res) => {
   } catch (e) {
     console.error('Meeting score fetch error:', e);
     return res.status(500).json({ ok: false, error: 'Unexpected error fetching scores' });
+  }
+});
+
+// POST /send-priority-note — founder flags a task as priority; emails all cofounders
+app.post('/send-priority-note', async (req, res) => {
+  try {
+    if (!resend) {
+      return res.status(500).json({ ok: false, error: 'Email service not configured. Set RESEND_API_KEY in backend .env' });
+    }
+
+    const { title, content, todos, business, deadline, emails } = req.body || {};
+
+    // Recipients: explicit list from body overrides, otherwise COFOUNDER_EMAILS from .env
+    let list = [];
+    if (emails) list = Array.isArray(emails) ? emails : String(emails).split(/[\s,;]+/);
+    else list = COFOUNDER_EMAILS;
+    list = list.map((e) => String(e || '').trim()).filter(Boolean);
+    if (!list.length) {
+      return res.status(400).json({ ok: false, error: 'No cofounder emails configured. Set COFOUNDER_EMAILS in backend .env' });
+    }
+
+    const safeTitle = escapeHtml(title || 'Untitled task');
+    const safeBusiness = escapeHtml(business || 'The X Company');
+    const safeDeadline = deadline ? escapeHtml(deadline) : '';
+
+    const deadlineBlock = safeDeadline
+      ? `<div style="background:#fff1f0;border:1px solid #ffccc7;border-radius:12px;padding:14px 18px;margin:18px 0;">
+           <div style="font-size:11px;color:#cf1322;font-weight:800;letter-spacing:1px;text-transform:uppercase;">Deadline</div>
+           <div style="font-size:18px;color:#161616;font-weight:700;margin-top:4px;">${safeDeadline}</div>
+         </div>`
+      : `<div style="color:#6b7280;font-size:13px;margin:16px 0;">No deadline set</div>`;
+
+    const todoList = Array.isArray(todos) && todos.length
+      ? `<div style="margin-top:18px;">
+           <div style="font-size:11px;color:#6b7280;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Checklist</div>
+           ${todos.map((t) => `<div style="padding:6px 0;font-size:14px;color:${t.done ? '#9ca3af' : '#161616'};">${t.done ? '✅' : '⬜️'} <span style="${t.done ? 'text-decoration:line-through;' : ''}">${escapeHtml(t.text)}</span></div>`).join('')}
+         </div>`
+      : '';
+
+    const contentBlock = content
+      ? `<p style="color:#374151;font-size:15px;line-height:1.6;margin:10px 0 0;white-space:pre-wrap;">${escapeHtml(content)}</p>`
+      : '';
+
+    const html = `
+      <div style="background:#f4f4f5;padding:24px;font-family:'Inter',Arial,Helvetica,sans-serif;">
+        <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:18px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,0.08);">
+          <div style="background:#161616;padding:22px 28px;">
+            <span style="display:inline-block;background:#ff4d4f;color:#ffffff;font-size:11px;font-weight:800;letter-spacing:2px;padding:6px 14px;border-radius:999px;">ON PRIORITY</span>
+            <div style="color:#ffffff;font-size:13px;margin-top:12px;opacity:0.7;">${safeBusiness}</div>
+          </div>
+          <div style="padding:28px;">
+            <h1 style="margin:0;font-size:22px;color:#161616;line-height:1.3;">${safeTitle}</h1>
+            ${contentBlock}
+            ${deadlineBlock}
+            ${todoList}
+            <div style="margin-top:24px;padding-top:18px;border-top:1px solid #eeeeee;color:#9ca3af;font-size:12px;">
+              Flagged on priority from X Vault &middot; ${escapeHtml(new Date().toLocaleString('en-IN'))}
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    try {
+      const { error: emailErr } = await resend.emails.send({
+        from: SEND_EMAIL_FROM,
+        to: list,
+        subject: `🔴 PRIORITY: ${title || 'Task'}${deadline ? ` (due ${deadline})` : ''}`,
+        html,
+      });
+      if (emailErr) {
+        const msg = emailErr.message || String(emailErr);
+        if (msg && msg.includes('verify a domain')) {
+          return res.status(500).json({ ok: false, error: 'Email sending requires domain verification at resend.com/domains, then update SEND_EMAIL_FROM.', details: msg });
+        }
+        return res.status(500).json({ ok: false, error: 'Failed to send priority email.', details: msg });
+      }
+      return res.json({ ok: true, message: 'Priority email sent', recipients: list.length });
+    } catch (emailErr) {
+      const msg = emailErr.message || String(emailErr);
+      return res.status(500).json({ ok: false, error: 'Failed to send priority email.', details: msg });
+    }
+  } catch (e) {
+    console.error('Priority note email failed', e);
+    return res.status(500).json({ ok: false, error: 'Unexpected error sending priority email.' });
+  }
+});
+
+// POST /dce-ask — X-Ai: answer founder questions by analysing the selected business's data
+app.post('/dce-ask', async (req, res) => {
+  try {
+    if (!GEMINI_API_KEY) {
+      return res.status(500).json({ ok: false, error: 'X-Ai not configured. Set GEMINI_API_KEY in backend .env' });
+    }
+    if (!supabase) {
+      return res.status(500).json({ ok: false, error: 'Database not configured' });
+    }
+    const { business_id, business_name, question } = req.body || {};
+    if (!business_id || !question || !String(question).trim()) {
+      return res.status(400).json({ ok: false, error: 'business_id and question are required' });
+    }
+
+    const [notesR, spendsR, meetingsR, docsR] = await Promise.all([
+      supabase.from('dce_notes').select('title,content,todos,deadline,updated_at').eq('business_id', business_id).order('updated_at', { ascending: false }).limit(200),
+      supabase.from('dce_expenditures').select('vendor,category,amount,spend_date,status,note').eq('business_id', business_id).order('spend_date', { ascending: false }).limit(400),
+      supabase.from('dce_meetings').select('title,meeting_date,meeting_time,platform,notes').eq('business_id', business_id).order('meeting_date', { ascending: false }).limit(100),
+      supabase.from('dce_documents').select('title,doc_type,updated_at').eq('business_id', business_id).order('updated_at', { ascending: false }).limit(100),
+    ]);
+
+    const spends = spendsR.data || [];
+    const notes = notesR.data || [];
+    const meetings = meetingsR.data || [];
+    const docs = docsR.data || [];
+
+    const lines = [];
+    lines.push(`Business: ${business_name || business_id}`);
+    lines.push(`Today's date: ${new Date().toISOString().slice(0, 10)}`);
+    lines.push('');
+    lines.push('=== MONEY SPENDS (on what | category | amount ₹ | date | note) ===');
+    spends.forEach((s) => lines.push(`- ${s.vendor} | ${s.category || ''} | ${s.amount} | ${s.spend_date || ''} | ${s.note || ''}`));
+    lines.push('');
+    lines.push('=== NOTES (title | content | checklist | deadline) ===');
+    notes.forEach((n) => {
+      const todos = Array.isArray(n.todos) ? n.todos.map((t) => `${t.done ? '[done]' : '[pending]'} ${t.text}`).join('; ') : '';
+      lines.push(`- ${n.title} | ${n.content || ''} | ${todos} | ${n.deadline || ''}`);
+    });
+    lines.push('');
+    lines.push('=== MEETINGS (title | date | time | platform | notes) ===');
+    meetings.forEach((m) => lines.push(`- ${m.title} | ${m.meeting_date || ''} | ${m.meeting_time || ''} | ${m.platform || ''} | ${m.notes || ''}`));
+    lines.push('');
+    lines.push('=== FILES (title | type | date) ===');
+    docs.forEach((d) => lines.push(`- ${d.title} | ${d.doc_type || ''} | ${(d.updated_at || '').slice(0, 10)}`));
+
+    const context = lines.join('\n');
+
+    const prompt = `You are X-Ai, a sharp assistant for a business owner inside the DCE app.
+Answer the QUESTION using ONLY the DATA below, for the business "${business_name || business_id}".
+Rules:
+- Be concise and specific. Give exact dates, amounts (in ₹) and names when relevant.
+- Money "spends" are amounts the business paid out (vendor = what/whom it was paid for).
+- If the answer is not in the records, clearly say you couldn't find it in the data.
+- Reply in the SAME language and script the user used (Hindi / Hinglish / English).
+
+DATA:
+${context}
+
+QUESTION: ${question}`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2 } }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = data?.error?.message || `Gemini request failed (${r.status})`;
+      return res.status(500).json({ ok: false, error: msg });
+    }
+    const answer = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('').trim() || 'No answer generated.';
+    return res.json({ ok: true, answer });
+  } catch (e) {
+    console.error('dce-ask failed', e);
+    return res.status(500).json({ ok: false, error: 'Unexpected error while asking X-Ai' });
   }
 });
 
