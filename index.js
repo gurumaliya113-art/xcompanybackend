@@ -864,7 +864,7 @@ app.post('/dce-ask', async (req, res) => {
 
     const [notesR, spendsR, meetingsR, docsR] = await Promise.all([
       supabase.from('dce_notes').select('title,content,todos,deadline,updated_at').eq('business_id', business_id).order('updated_at', { ascending: false }).limit(200),
-      supabase.from('dce_expenditures').select('vendor,category,amount,spend_date,status,note').eq('business_id', business_id).order('spend_date', { ascending: false }).limit(400),
+      supabase.from('dce_expenditures').select('*').eq('business_id', business_id).order('spend_date', { ascending: false }).limit(400),
       supabase.from('dce_meetings').select('title,meeting_date,meeting_time,platform,notes').eq('business_id', business_id).order('meeting_date', { ascending: false }).limit(100),
       supabase.from('dce_documents').select('title,doc_type,updated_at').eq('business_id', business_id).order('updated_at', { ascending: false }).limit(100),
     ]);
@@ -874,9 +874,16 @@ app.post('/dce-ask', async (req, res) => {
     const meetings = meetingsR.data || [];
     const docs = docsR.data || [];
 
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10);
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const currentMonth = `${monthNames[now.getMonth()]} ${now.getFullYear()}`;
+    const totalSpend = spends.reduce((sum, s) => sum + Number(s.amount || 0), 0);
+
     const lines = [];
     lines.push(`Business: ${business_name || business_id}`);
-    lines.push(`Today's date: ${new Date().toISOString().slice(0, 10)}`);
+    lines.push(`Today's date: ${todayStr} (current month is ${currentMonth})`);
+    lines.push(`Total of all spends recorded: ₹${totalSpend}`);
     lines.push('');
     lines.push('=== MONEY SPENDS (on what | category | amount ₹ | date | note) ===');
     spends.forEach((s) => lines.push(`- ${s.vendor} | ${s.category || ''} | ${s.amount} | ${s.spend_date || ''} | ${s.note || ''}`));
@@ -900,8 +907,11 @@ Answer the QUESTION using ONLY the DATA below, for the business "${business_name
 Rules:
 - Be concise and specific. Give exact dates, amounts (in ₹) and names when relevant.
 - Money "spends" are amounts the business paid out (vendor = what/whom it was paid for).
-- If the answer is not in the records, clearly say you couldn't find it in the data.
+- TODAY is ${todayStr} and the current month is ${currentMonth}. Treat all DATA as current and authoritative, even if a date looks like it is in the future — never dismiss data for being "future-dated".
+- For "this month" / "is mahine", include every SPENDS entry whose date is within ${currentMonth}, and add up the amounts yourself. Do the date math from the dates given; do NOT say data is missing if matching entries exist.
+- Only say you couldn't find it when there is genuinely no relevant entry in the DATA.
 - Reply in the SAME language and script the user used (Hindi / Hinglish / English).
+
 
 DATA:
 ${context}
